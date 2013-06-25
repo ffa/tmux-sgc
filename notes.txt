@@ -1,0 +1,22 @@
+list-sessions
+list-windows
+list-panes
+
+list-keys
+show-options
+show-window-options
+
+show-environment
+
+#use `echo` to write back to history buffer because
+#history buffers are not accessible like paste buffers
+history-limit
+capture-pane
+list-buffers
+save-buffer
+
+# for restoring layout from list-windows
+select-layout
+
+server-info
+

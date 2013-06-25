@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -e
+[ -n "$TSGC_DEBUG" ] && set -x
+
+#
+# Config
+#
+sessionsDir="$(pwd)/.tmux.session"
+
+#
+# Load Session
+#
+sessionDir="${sessionsDir}/${1}"
+
+if [[ -d $sessionDir ]]; then
+  exec ${sessionDir}/session
+fi

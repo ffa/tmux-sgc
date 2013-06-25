@@ -1,0 +1,217 @@
+#!/usr/bin/env bash
+set -e
+[ -n "$TSGC_DEBUG" ] && set -x
+
+
+#
+# Config
+#
+sessionsDir="$(pwd)/.tmux.session"
+tmpDir=$(mktemp -d)
+
+
+#
+# Misc
+#
+writeToConfig() {
+  echo $2 >> $1
+}
+
+removeTmpDir() {
+  if [[ -d ${tmpDir} ]]; then
+    rm -r ${tmpDir}
+  fi
+}
+
+
+#
+# Global
+#
+globalEnvironment=$(tmux show-environment -g)
+globalOptions="$(tmux show-options -g)"
+
+
+#
+# Server
+#
+serverOptions="$(tmux show-options -s)"
+
+
+#
+# Paste Buffers
+#
+pasteBuffersTmpDir="${tmpDir}/pasteBuffers"
+pasteBuffers=$(tmux list-buffers)
+
+mkdir $pasteBuffersTmpDir
+
+if [[ -n "$pasteBuffers" ]]; then
+  while IFS=$'\n' read -r buffer
+  do
+    IFS=': ' read -a bufferInfo <<<"$buffer"
+
+    tmux save-buffer -b ${bufferInfo[0]} ${pasteBuffersTmpDir}/${bufferInfo[0]}
+  done <<<"$pasteBuffers"
+fi
+
+
+#
+# Sessions
+#
+if [[ ! -d ${sessionsDir} ]]; then
+  mkdir ${sessionsDir}
+fi
+
+sessionList=$(tmux list-sessions -F "#{session_name}"$'\036'"#{session_attached}")
+
+if [[ -n "$sessionList" ]]; then
+  while IFS=$'\n' read -r session; do
+    IFS=$'\036' read -a sessionInfo <<<"$session"
+    #sessionEnvironment=$(tmux show-environment -t ${sessionInfo[0]})
+    windowList=$(tmux list-windows -t ${sessionInfo[0]} -F "#{window_name}"$'\036'"#{window_index}"$'\036'"#{window_layout}"$'\036'"#{window_active}"$'\036'"#{window_flags}")
+    sessionDir="${sessionsDir}/${sessionInfo[0]}"
+    sessionFile="${sessionDir}/session"
+    # the users "~/.tmux.conf" is not used
+    sessionTmuxConf="${sessionDir}/.tmux.conf"
+    windowCount=0
+
+    if [[ ! -d $sessionDir ]]; then
+      mkdir $sessionDir
+    fi
+
+    echo "# ## Global Options" > $sessionTmuxConf
+    tmux show-options -g >> $sessionTmuxConf
+    echo -e "\n# ## Server Options" >> $sessionTmuxConf
+    tmux show-options -s >> $sessionTmuxConf
+    echo -e "\n# ## Session Options" >> $sessionTmuxConf
+    tmux show-options -t ${sessionInfo[0]} >> $sessionTmuxConf
+
+    echo "#!/usr/bin/env bash" > ${sessionFile}
+    echo "# # session: ${sessionInfo[0]}" >> ${sessionFile}
+
+    while IFS=$'\n' read -r window; do
+      IFS=$'\036' read -a windowInfo <<<"$window"
+      targetWindow="${sessionInfo[0]}:${windowInfo[1]}"
+      windowOptions="$(tmux show-options -w -t ${targetWindow})"
+      paneList=$(tmux list-panes -t ${targetWindow} -F "#{pane_id}"$'\036'"#{pane_start_path}"$'\036'"#{pane_start_command}"$'\036'"#{pane_active}")
+      paneCount=0
+
+      echo -e "\n# ## Window Options" >> $sessionTmuxConf
+      tmux show-options -w -t ${targetWindow} >> $sessionTmuxConf
+
+      echo -e "\n# ## window: ${windowInfo[0]}" >> ${sessionFile}
+
+      while IFS=$'\n' read -r pane; do
+        IFS=$'\036' read -a paneInfo <<<"$pane"
+        targetPane="${targetWindow}.${paneCount}"
+        historyBufferFile="${sessionDir}/${targetPane}.historyBuffer"
+        bashHistoryFile="${sessionDir}/${targetPane}.bashHistory"
+
+        echo -e "\n# ### pane: ${paneCount}" >> ${sessionFile}
+
+        # save and load panes
+        #
+        # starting a new session or window inherantly includes a new pane. So,
+        # their commands are built when looping through panes, panes are available.
+        #
+
+        # if the "default-path" option is set to ".", which is the default,
+        # ensure the starting directory, ".", is the default path. The "default-path"
+        # option is currently not checked, but may be soon. Until then, assume
+        # it is set to ".".
+        if [[ -n "${paneInfo[1]}" ]]; then
+          echo "(" >> ${sessionFile}
+          echo "  cd ${paneInfo[1]} &&" >> ${sessionFile}
+          echo -en "  " >> ${sessionFile}
+        fi
+
+        if [[ $paneCount == 0 ]]; then
+          if [[ $windowCount == 0 ]]; then
+            echo "tmux -f ${sessionTmuxConf} new-session -d -s ${sessionInfo[0]} -n ${windowInfo[0]} ${paneInfo[2]}" >> ${sessionFile}
+          else
+            echo "tmux new-window -d -n ${windowInfo[0]} ${paneInfo[2]}" >> ${sessionFile}
+          fi
+        else
+          echo "tmux split-window -d -t ${targetWindow}."$((paneCount - 1))" ${paneInfo[2]}" >> ${sessionFile}
+        fi
+
+        if [[ -n "${paneInfo[1]}" ]]; then
+          echo ") || {" >> ${sessionFile}
+          echo "  exit 1;" >> ${sessionFile}
+          echo "}" >> ${sessionFile}
+        fi
+
+        # save and load bash history
+        $(history -w $bashHistoryFile)
+        echo "tmux send-keys -t ${targetPane} "'"'"history -r '${bashHistoryFile}'"'" "Enter"' >> ${sessionFile}
+      
+        # save and load history buffer
+        tmux capture-pane -S -999999 -t ${paneInfo[0]}
+        tmux save-buffer -b 0 $historyBufferFile
+        tmux delete-buffer -b 0
+
+        echo "tmux send-keys -t ${targetPane} 'cat "'"'"${historyBufferFile}"'"'" > \$(tty)'"' "Enter"' >> ${sessionFile}
+
+        # save and select active pane
+        if [[ "${paneInfo[3]}" == 1 ]]; then
+          echo "tmux select-pane -t ${targetPane}" >> ${sessionFile}
+        fi
+
+        (( paneCount += 1 ))
+      done <<<"$paneList"
+
+      echo "tmux select-layout -t ${targetWindow} '${windowInfo[2]}'" >> ${sessionFile}
+
+      # save and select active window
+      if [ "${windowInfo[3]}" == 1 ]; then
+        echo "tmux select-window -t ${targetWindow}" >> ${sessionFile}
+      fi
+
+      (( windowCount += 1 ))
+    done <<<"$windowList"
+
+    # save and load paste buffers
+    #
+    # a copy of the global buffers is saved for each session. And, buffers are
+    # appended to the buffer list when loaded.
+    #
+    # So, loading multiple sessions may cause loading of duplicate buffers.
+    # Implementing buffer hash checking may be used to avoid duplicates.
+    #
+    # Also, a global hash based storage may be used to avoid duplicates when
+    # storing the paste buffers. However, the paste buffers would not longer be
+    # stored with the session.
+    if [[ -n "$pasteBuffers" ]]; then
+      mkdir -p ${sessionDir}/pasteBuffers
+      cp -a ${pasteBuffersTmpDir}/* ${sessionDir}/pasteBuffers
+
+      find ${sessionDir}/pasteBuffers -maxdepth 1 -type f -print0 | while IFS= read -r -d $'\0' bufferFile; do
+        echo "tmux load-buffer ${bufferFile}" >> ${sessionFile}
+      done
+    fi
+
+    # save and attach active session
+    if [ "${sessionInfo[1]}" == 1 ]; then
+      echo "tmux attach-session -t ${sessionInfo[0]}" >> ${sessionFile}
+    fi
+
+    # modify to be executable
+    chmod +x ${sessionFile}
+  done <<<"$sessionList"
+else
+  echo "tmux sgc: no sessions exist to be saved" >&2
+  removeTmpDir
+  exit 1
+fi
+
+
+#
+# cleanup
+#
+removeTmpDir
+
+
+#
+# bye
+#
+exit 0
