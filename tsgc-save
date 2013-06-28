@@ -13,10 +13,6 @@ tmpDir=$(mktemp -d)
 #
 # Misc
 #
-writeToConfig() {
-  echo "$2" >> "$1"
-}
-
 removeTmpDir() {
   if [[ -d "${tmpDir}" ]]; then
     rm -r "${tmpDir}"
