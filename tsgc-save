@@ -84,6 +84,13 @@ if [[ -n "$sessionList" ]]; then
 
     echo "#!/usr/bin/env bash" > "${sessionFile}"
     echo "# # session: ${sessionInfo[0]}" >> "${sessionFile}"
+    cat >> "$sessionFile" <<-EOL
+			tmux has-session -t "${sessionInfo[0]}" &>/dev/null
+			if [[ \$? ]]; then
+			  echo "The session \"${sessionInfo[0]}\" already exists. This script does not overwrite sessions." >&2
+			  exit 1
+			fi
+		EOL
 
     while IFS=$'\n' read -r window; do
       IFS=$'\036' read -a windowInfo <<<"$window"
