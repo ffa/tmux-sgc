@@ -61,6 +61,8 @@
   * real "--help" options
   * plugin capability, so other shells, like zsh and fish, may be used instead
     of bash
+  * if the multiple sessions were attached each to a different pty, on restore,
+    the attachment of multiple sessions will be attempted. Results are unknown.
 
 
 ## Credits

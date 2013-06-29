@@ -13,5 +13,5 @@ sessionsDir="$(pwd)/.tmux.session"
 sessionDir="${sessionsDir}/${1}"
 
 if [[ -d $sessionDir ]]; then
-  exec ${sessionDir}/session
+  exec "${sessionDir}/session"
 fi

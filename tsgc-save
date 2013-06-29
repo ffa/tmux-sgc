@@ -86,7 +86,7 @@ if [[ -n "$sessionList" ]]; then
     echo "# # session: ${sessionInfo[0]}" >> "${sessionFile}"
     cat >> "$sessionFile" <<-EOL
 			tmux has-session -t "${sessionInfo[0]}" &>/dev/null
-			if [[ \$? ]]; then
+			if [[ ! \$? ]]; then
 			  echo "The session \"${sessionInfo[0]}\" already exists. This script does not overwrite sessions." >&2
 			  exit 1
 			fi
