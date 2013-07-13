@@ -63,6 +63,9 @@
     of bash
   * if the multiple sessions were attached each to a different pty, on restore,
     the attachment of multiple sessions will be attempted. Results are unknown.
+  * create configuration settings
+  * add a setting to allow sourcing the default or users tmux conf according to
+    how the "-f" option normally behaves
 
 
 ## Credits

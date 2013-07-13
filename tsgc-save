@@ -1,41 +1,58 @@
 #!/usr/bin/env bash
-set -e
+#set -e
 [ -n "$TSGC_DEBUG" ] && set -x
 
 
-#
 # Config
-#
 sessionsDir="$(pwd)/.tmux.session"
 tmpDir=$(mktemp -d)
 
 
-#
 # Misc
-#
-removeTmpDir() {
-  if [[ -d "${tmpDir}" ]]; then
-    rm -r "${tmpDir}"
+removeDir() {
+  if [[ -d "${1}" ]]; then
+    rm -r "${1}"
   fi
 }
 
+saveTmuxConf() {
+  echo "### Global Options" > "$2"
+  tmux show-options -g >> "$2"
 
-#
+  echo -e "\n### Server Options" >> "$2"
+  tmux show-options -s >> "$2"
+
+  echo -e "\n### Session Options" >> "$2"
+  tmux show-options -t "$1" >> "$2"
+}
+
+saveBashHistory() {
+  gdb -batch -x <<-EOF
+	attach $1
+	call write_history("${session_saveDir}/${pane_target}/${1}.bashHistory")
+	
+	EOF
+
+  echo "tmux send-keys -t \"${pane_target}\" \"history -r '${session_saveDir}/${pane_target}/${1}.bashHistory'\" \"Enter\"" >> "${session_restoreFile}"
+}
+
+saveVimSession() {
+  vimSessionFile=$(printf ':mksession! %q/%q/%q.vimSession\n' "${session_saveDir}" "${pane_target}" "${1}")
+  tmux send-keys -t "${pane_target}" "Escape" "${vimSessionFile}" "Enter"
+  printf "tmux send-keys -t \"${pane_target}\" 'vim -S \"%q/%q/%q.vimSession\"' \"Enter\"\n" "${session_saveDir}" "${pane_target}" "${1}" >> "${session_restoreFile}"
+}
+
+
 # Global
-#
 globalEnvironment=$(tmux show-environment -g)
 globalOptions="$(tmux show-options -g)"
 
 
-#
 # Server
-#
 serverOptions="$(tmux show-options -s)"
 
 
-#
 # Paste Buffers
-#
 pasteBuffersTmpDir="${tmpDir}/pasteBuffers"
 pasteBuffers=$(tmux list-buffers)
 
@@ -51,65 +68,64 @@ if [[ -n "$pasteBuffers" ]]; then
 fi
 
 
-#
 # Sessions
-#
 if [[ ! -d "${sessionsDir}" ]]; then
   mkdir "${sessionsDir}"
 fi
 
-sessionList=$(tmux list-sessions -F "#{session_name}"$'\036'"#{session_attached}")
+server_sessionList=$(tmux list-sessions -F "#{session_name}"$'\036'"#{session_attached}")
 
-if [[ -n "$sessionList" ]]; then
+if [[ -n "$server_sessionList" ]]; then
   while IFS=$'\n' read -r session; do
-    IFS=$'\036' read -a sessionInfo <<<"$session"
-    #sessionEnvironment=$(tmux show-environment -t "${sessionInfo[0]}")
-    windowList=$(tmux list-windows -t "${sessionInfo[0]}" -F "#{window_name}"$'\036'"#{window_index}"$'\036'"#{window_layout}"$'\036'"#{window_active}"$'\036'"#{window_flags}")
-    sessionDir="${sessionsDir}/${sessionInfo[0]}"
-    sessionFile="${sessionDir}/session"
+    IFS=$'\036' read session_name session_attached <<<"$session"
+    #session_env=$(tmux show-environment -t "${session_name}")
+    session_windowList=$(tmux list-windows -t "${session_name}" -F "#{window_name}"$'\036'"#{window_index}"$'\036'"#{window_layout}"$'\036'"#{window_active}"$'\036'"#{window_flags}")
+    session_saveDir="${sessionsDir}/${session_name}"
+    session_restoreFile="${session_saveDir}/session"
     # the users "~/.tmux.conf" is not used
-    sessionTmuxConf="${sessionDir}/.tmux.conf"
-    windowCount=0
+    session_tmuxConf="${session_saveDir}/.tmux.conf"
+    window_num=0
 
-    if [[ ! -d "$sessionDir" ]]; then
-      mkdir "$sessionDir"
+    if [[ ! -d "$session_saveDir" ]]; then
+      mkdir "$session_saveDir"
     fi
 
-    echo "# ## Global Options" > "$sessionTmuxConf"
-    tmux show-options -g >> "$sessionTmuxConf"
-    echo -e "\n# ## Server Options" >> "$sessionTmuxConf"
-    tmux show-options -s >> "$sessionTmuxConf"
-    echo -e "\n# ## Session Options" >> "$sessionTmuxConf"
-    tmux show-options -t "${sessionInfo[0]}" >> "$sessionTmuxConf"
+    saveTmuxConf "$session_name" "$session_tmuxConf"
 
-    echo "#!/usr/bin/env bash" > "${sessionFile}"
-    echo "# # session: ${sessionInfo[0]}" >> "${sessionFile}"
-    cat >> "$sessionFile" <<-EOL
-			tmux has-session -t "${sessionInfo[0]}" &>/dev/null
+    echo "#!/usr/bin/env bash" > "${session_restoreFile}"
+    echo "# # session: ${session_name}" >> "${session_restoreFile}"
+    cat >> "$session_restoreFile" <<-EOL
+			tmux has-session -t "${session_name}" &>/dev/null
 			if [[ ! \$? ]]; then
-			  echo "The session \"${sessionInfo[0]}\" already exists. This script does not overwrite sessions." >&2
+			  echo "The session \"${session_name}\" already exists. This script does not overwrite sessions." >&2
 			  exit 1
 			fi
 		EOL
 
     while IFS=$'\n' read -r window; do
-      IFS=$'\036' read -a windowInfo <<<"$window"
-      targetWindow="${sessionInfo[0]}:${windowInfo[1]}"
-      paneList=$(tmux list-panes -t "${targetWindow}" -F "#{pane_id}"$'\036'"#{pane_start_path}"$'\036'"#{pane_start_command}"$'\036'"#{pane_active}")
-      paneCount=0
+      IFS=$'\036' read window_name window_index window_layout window_active window_flags <<<"$window"
+      window_target="${session_name}:${window_index}"
+      window_paneList=$(tmux list-panes -t "${window_target}" -F "#{pane_id}"$'\036'"#{pane_start_path}"$'\036'"#{pane_start_command}"$'\036'"#{pane_active}"$'\036'"#{pane_pid}")
+      pane_num=0
 
-      echo -e "\n# ## Window Options" >> "$sessionTmuxConf"
-      tmux show-options -w -t "${targetWindow}" >> "$sessionTmuxConf"
+      # TODO: a per window tmux save and restore.
+      # currently, the window tmux configs are saved to the session tmux conf
+      # which will cause the last saved window's tmux conf to win and be set
+      # for all windows.
+      echo -e "\n### Window Options" >> "$session_tmuxConf"
+      tmux show-options -w -t "${window_target}" >> "$session_tmuxConf"
 
-      echo -e "\n# ## window: ${windowInfo[0]}" >> "${sessionFile}"
+      echo -e "\n# ## window: ${window_name}" >> "${session_restoreFile}"
 
       while IFS=$'\n' read -r pane; do
-        IFS=$'\036' read -a paneInfo <<<"$pane"
-        targetPane="${targetWindow}.${paneCount}"
-        historyBufferFile="${sessionDir}/${targetPane}.historyBuffer"
-        bashHistoryFile="${sessionDir}/${targetPane}.bashHistory"
+        IFS=$'\036' read pane_id pane_start_path pane_start_command pane_active pane_pid <<<"$pane"
+        pane_comm=($(</proc/${pane_pid}/comm))
+        pane_target="${window_target}.${pane_num}"
+        pane_historyBufferFile="${session_saveDir}/${pane_target}/historyBuffer"
 
-        echo -e "\n# ### pane: ${paneCount}" >> "${sessionFile}"
+        mkdir -p "${session_saveDir}/${pane_target}"
+
+        echo -e "\n# ### pane: ${pane_num}" >> "${session_restoreFile}"
 
         # save and load panes
         #
@@ -121,56 +137,86 @@ if [[ -n "$sessionList" ]]; then
         # ensure the starting directory, ".", is the default path. The "default-path"
         # option is currently not checked, but may be soon. Until then, assume
         # it is set to ".".
-        if [[ -n "${paneInfo[1]}" ]]; then
-          echo "(" >> "${sessionFile}"
-          echo "  cd \"${paneInfo[1]}\" &&" >> "${sessionFile}"
-          echo -en "  " >> "${sessionFile}"
+        if [[ -n "${pane_start_path}" ]]; then
+          echo "(" >> "${session_restoreFile}"
+          echo "  cd \"${pane_start_path}\" &&" >> "${session_restoreFile}"
+          echo -en "  " >> "${session_restoreFile}"
         fi
 
-        if [[ "$paneCount" == 0 ]]; then
-          if [[ "$windowCount" == 0 ]]; then
-            echo "tmux -f \"${sessionTmuxConf}\" new-session -d -s \"${sessionInfo[0]}\" -n \"${windowInfo[0]}\" \"${paneInfo[2]}\"" >> "${sessionFile}"
+        if [[ "$pane_num" == 0 ]]; then
+          if [[ "$window_num" == 0 ]]; then
+            echo "tmux -f \"${session_tmuxConf}\" new-session -d -s \"${session_name}\" -n \"${window_name}\" \"${pane_start_command}\"" >> "${session_restoreFile}"
           else
-            echo "tmux new-window -d -n \"${windowInfo[0]}\" \"${paneInfo[2]}\"" >> "${sessionFile}"
+            echo "tmux new-window -d -n \"${window_name}\" \"${pane_start_command}\"" >> "${session_restoreFile}"
           fi
         else
-          echo "tmux split-window -d -t \"${targetWindow}."$((paneCount - 1))"\" \"${paneInfo[2]}\"" >> "${sessionFile}"
+          echo "tmux split-window -d -t \"${window_target}."$((pane_num - 1))"\" \"${pane_start_command}\"" >> "${session_restoreFile}"
         fi
 
-        if [[ -n "${paneInfo[1]}" ]]; then
-          echo ") || {" >> "${sessionFile}"
-          echo "  exit 1;" >> "${sessionFile}"
-          echo "}" >> "${sessionFile}"
+        if [[ -n "${pane_start_path}" ]]; then
+          echo ") || {" >> "${session_restoreFile}"
+          echo "  exit 1;" >> "${session_restoreFile}"
+          echo "}" >> "${session_restoreFile}"
         fi
 
-        # save and load bash history
-        $(history -w "$bashHistoryFile")
-        echo "tmux send-keys -t \"${targetPane}\" \"history -r '${bashHistoryFile}'\" \"Enter\"" >> "${sessionFile}"
-      
+        # save environment per pane, PID
+        # /proc/<PID>/environ
+
         # save and load history buffer
-        tmux capture-pane -S -999999 -t "${paneInfo[0]}"
-        tmux save-buffer -b 0 "$historyBufferFile"
+        # this method relies on bash to restore the history. So, if bash
+        # isn't the $pane_pid, restoration fails.
+        tmux capture-pane -S -999999 -t "${pane_id}"
+        tmux save-buffer -b 0 "$pane_historyBufferFile"
         tmux delete-buffer -b 0
 
-        echo "tmux send-keys -t \"${targetPane}\" 'cat \"${historyBufferFile}\" > \$(tty)' \"Enter\"" >> "${sessionFile}"
+        echo "tmux send-keys -t \"${pane_target}\" 'cat \"${pane_historyBufferFile}\" > \$(tty)' \"Enter\"" >> "${session_restoreFile}"
+ 
+        # action based on pid
+        # TODO: change into a plugin interface:
+        # the process tree will be available to plugins, so the plugins may
+        # take action based on order and parent processes to ensure the correct
+        # saving and restoration steps are taken
+        pane_processes=$(ps -o pid=,comm= --ppid "${pane_pid}")
+        pane_processes="${pane_pid} ${pane_comm}$'\n'${pane_pid_children}"
+        while IFS=$'\n' read -r process; do
+          IFS=' ' read process_pid process_comm <<<"$process"
+
+          if [[ "$process_comm" == "vim" ]]; then
+            # vim plugin: save session
+            saveVimSession "$process_pid"
+          elif [[ "$process_comm" == "bash" ]]; then
+            # bash plugin: save bash history
+            saveBashHistory "$process_pid"
+          else
+            removeDir "$session_saveDir"
+            echo "tmux sgc: process in pane not recognized. "\
+              "A process must have a save and restore action associated with "\
+              "it. tmux sgc does not magically know how to handle unknown"\
+              " processes, programs." >&2
+          fi
+        done <<<"$pane_processes"
+        
+        # afs retoken
+        #http://www.sph.umich.edu/computing/unix/screen.html
+        #kinit ; aklog
 
         # save and select active pane
-        if [[ "${paneInfo[3]}" == 1 ]]; then
-          echo "tmux select-pane -t \"${targetPane}\"" >> "${sessionFile}"
+        if [[ "${pane_active}" == 1 ]]; then
+          echo "tmux select-pane -t \"${pane_target}\"" >> "${session_restoreFile}"
         fi
 
-        (( paneCount += 1 ))
-      done <<<"$paneList"
+        (( pane_num += 1 ))
+      done <<<"$window_paneList"
 
-      echo "tmux select-layout -t \"${targetWindow}\" '${windowInfo[2]}'" >> "${sessionFile}"
+      echo "tmux select-layout -t \"${window_target}\" '${window_layout}'" >> "${session_restoreFile}"
 
       # save and select active window
-      if [ "${windowInfo[3]}" == 1 ]; then
-        echo "tmux select-window -t \"${targetWindow}\"" >> "${sessionFile}"
+      if [ "${window_active}" == 1 ]; then
+        echo "tmux select-window -t \"${window_target}\"" >> "${session_restoreFile}"
       fi
 
-      (( windowCount += 1 ))
-    done <<<"$windowList"
+      (( window_num += 1 ))
+    done <<<"$session_windowList"
 
     # save and load paste buffers
     #
@@ -184,36 +230,32 @@ if [[ -n "$sessionList" ]]; then
     # storing the paste buffers. However, the paste buffers would not longer be
     # stored with the session.
     if [[ -n "$pasteBuffers" ]]; then
-      mkdir -p "${sessionDir}/pasteBuffers"
-      cp -a "${pasteBuffersTmpDir}/*" "${sessionDir}/pasteBuffers"
+      mkdir -p "${session_saveDir}/pasteBuffers"
+      cp -a "${pasteBuffersTmpDir}/*" "${session_saveDir}/pasteBuffers"
 
-      find "${sessionDir}/pasteBuffers" -maxdepth 1 -type f -print0 | while IFS= read -r -d $'\0' bufferFile; do
-        echo "tmux load-buffer \"${bufferFile}\"" >> "${sessionFile}"
+      find "${session_saveDir}/pasteBuffers" -maxdepth 1 -type f -print0 | while IFS= read -r -d $'\0' bufferFile; do
+        echo "tmux load-buffer \"${bufferFile}\"" >> "${session_restoreFile}"
       done
     fi
 
     # save and attach active session
-    if [ "${sessionInfo[1]}" == 1 ]; then
-      echo "tmux attach-session -t \"${sessionInfo[0]}\"" >> "${sessionFile}"
+    if [ "${session_attached}" == 1 ]; then
+      echo "tmux attach-session -t \"${session_name}\"" >> "${session_restoreFile}"
     fi
 
     # modify to be executable
-    chmod +x "${sessionFile}"
-  done <<<"$sessionList"
+    chmod +x "${session_restoreFile}"
+  done <<<"$server_sessionList"
 else
   echo "tmux sgc: no sessions exist to be saved" >&2
-  removeTmpDir
+  removeDir "$tmpDir"
   exit 1
 fi
 
 
-#
 # cleanup
-#
-removeTmpDir
+removeDir "$tmpDir"
 
 
-#
 # bye
-#
 exit 0

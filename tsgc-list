@@ -10,6 +10,6 @@ sessionsDir="$(pwd)/.tmux.session"
 #
 # List Sessions
 #
-find $sessionsDir -maxdepth 1 -type d -printf '%P\0' | while IFS= read -r -d $'\0' session; do
-  echo $session
+find "$sessionsDir" -maxdepth 1 -type d -printf '%P\0' | while IFS= read -r -d $'\0' session; do
+  echo "$session"
 done
