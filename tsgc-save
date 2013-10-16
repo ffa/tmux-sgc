@@ -15,24 +15,36 @@ removeDir() {
   fi
 }
 
+# All options are restored as session options, so new global and server options
+# are not interfered with.
 saveTmuxConf() {
-#  echo "### Global Options" > "$2"
-#  tmux show-options -g >> "$2"
+  echo -e "\n### Global Options" > "$2"
+  while IFS=$'\n' read -r tmux_option; do
+    echo "set-option ${tmux_option}" >> "$2"
+  done < <(tmux show-options -g)
 
   echo -e "\n### Server Options" >> "$2"
   while IFS=$'\n' read -r tmux_option; do
-    echo "set-option -s ${tmux_option}" >> "$2"
+    echo "set-option ${tmux_option}" >> "$2"
   done < <(tmux show-options -s)
 
   echo -e "\n### Session Options" >> "$2"
   while IFS=$'\n' read -r tmux_option; do
-    echo "set-option -s ${tmux_option}" >> "$2"
+    echo "set-option ${tmux_option}" >> "$2"
   done < <(tmux show-options -t "$1")
 }
 
 saveBashHistory() {
   tmux send-keys -t "${pane_target}" "C-e" "C-u" "history -w '${pane_saveDir}/${1}.bashHistory'" "Enter" "C-y"
   echo "tmux send-keys -t \"${pane_target}\" \"history -r '${pane_saveDir}/${1}.bashHistory'\" \"Enter\"" >> "${session_restoreFile}"
+}
+
+# for now, only works with bash
+saveHistoryBuffer() {
+  tmux capture-pane -S -999999 -t "${pane_id}"
+  tmux save-buffer -b 0 "${pane_saveDir}/${1}.historyBuffer"
+  tmux delete-buffer -b 0
+  echo "tmux send-keys -t \"${pane_target}\" \"cat '${pane_saveDir}/${1}.historyBuffer'\" \"Enter\"" >> "${session_restoreFile}"
 }
 
 saveVimSession() {
@@ -62,6 +74,7 @@ saveProcess() {
   elif [[ "$process_comm" == "bash" ]]; then
     # bash plugin: save bash history
     saveBashHistory "$process_pid"
+    saveHistoryBuffer "$process_pid"
   else
     removeDir "$session_saveDir"
     echo "tmux sgc: process (pid: ${process_pid}) in pane not "\
@@ -75,13 +88,7 @@ saveProcess() {
 }
 
 # Global
-globalEnvironment=$(tmux show-environment -g)
-globalOptions="$(tmux show-options -g)"
-
-
-# Server
-serverOptions="$(tmux show-options -s)"
-
+#globalEnvironment=$(tmux show-environment -g)
 
 # Paste Buffers
 pasteBuffersTmpDir="${tmpDir}/pasteBuffers"
@@ -134,7 +141,7 @@ if [[ -n "$server_sessionList" ]]; then
         echo "The session \"${session_name}\" already exists. This script does not overwrite sessions." >&2
         exit 1
       fi
-    EOL
+EOL
 
     while IFS=$'\n' read -r window; do
       IFS=$'\036' read window_name window_index window_layout window_active window_flags <<<"$window"
@@ -150,7 +157,6 @@ if [[ -n "$server_sessionList" ]]; then
 
       # save tmux window options
       echo -e "\n## Window $window_num Options" > "$window_tmuxConf"
-      #tmux show-options -w -t "${window_target}" >> "$window_tmuxConf"
       while IFS=$'\n' read -r tmux_option; do
         echo "tmux set-option -w -t ${window_target} ${tmux_option}" >> "$window_tmuxConf"
       done < <(tmux show-options -w -t "${window_target}")
@@ -160,7 +166,6 @@ if [[ -n "$server_sessionList" ]]; then
         IFS=' ' read pane_comm pane_tpgid pane_tty < <(ps -o comm=,tpgid=,tty= --pid "$pane_pid")
         pane_target="${window_target}.${pane_num}"
         pane_saveDir="${window_saveDir}/${pane_num}"
-        pane_historyBufferFile="${pane_saveDir}/historyBuffer"
 
         mkdir -p "${pane_saveDir}"
 
@@ -206,12 +211,6 @@ if [[ -n "$server_sessionList" ]]; then
         # save environment per pane, PID
         # /proc/<PID>/environ
 
-        # save history buffer
-        tmux capture-pane -S -999999 -t "${pane_id}"
-        tmux save-buffer -b 0 "$pane_historyBufferFile"
-        tmux delete-buffer -b 0
-        echo "cat \"${pane_historyBufferFile}\" >> /dev/${pane_tty}" >> "${session_restoreFile}"
- 
         # action based on pid
         # TODO change into a plugin interface:
         # the process tree will be available to plugins, so the plugins may
