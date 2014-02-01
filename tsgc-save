@@ -15,9 +15,9 @@ removeDir() {
   fi
 }
 
+saveTmuxConf() {
 # All options are restored as session options, so new global and server options
 # are not interfered with.
-saveTmuxConf() {
   echo -e "\n### Global Options" > "$2"
   while IFS=$'\n' read -r tmux_option; do
     echo "set-option ${tmux_option}" >> "$2"
@@ -35,22 +35,33 @@ saveTmuxConf() {
 }
 
 saveBashHistory() {
-  tmux send-keys -t "${pane_target}" "C-e" "C-u" "history -w '${pane_saveDir}/${1}.bashHistory'" "Enter" "C-y"
-  echo "tmux send-keys -t \"${pane_target}\" \"history -r '${pane_saveDir}/${1}.bashHistory'\" \"Enter\"" >> "${session_restoreFile}"
+  echo '' > "${pane_saveDir}/${process_pid}/bashHistory"
+  tmux send-keys -t "${pane_target}" "C-e" "C-u" "history -w '${pane_saveDir}/${process_pid}/bashHistory'" "Enter" "C-y"
+  echo "tmux send-keys -t \"${pane_target}\" \"history -r '${pane_saveDir}/${process_pid}/bashHistory'\" \"Enter\"" >> "${session_restoreFile}"
 }
 
-# for now, only works with bash
 saveHistoryBuffer() {
+# for now, only works with bash
+  echo '' > "${pane_saveDir}/${process_pid}/historyBuffer"
   tmux capture-pane -S -999999 -t "${pane_id}"
-  tmux save-buffer -b 0 "${pane_saveDir}/${1}.historyBuffer"
+  tmux save-buffer -b 0 "${pane_saveDir}/${process_pid}/historyBuffer"
   tmux delete-buffer -b 0
-  echo "tmux send-keys -t \"${pane_target}\" \"cat '${pane_saveDir}/${1}.historyBuffer'\" \"Enter\"" >> "${session_restoreFile}"
+  echo "tmux send-keys -t \"${pane_target}\" \"cat '${pane_saveDir}/${process_pid}/historyBuffer'\" \"Enter\"" >> "${session_restoreFile}"
+}
+
+saveVim() {
+  mkdir -p "${pane_saveDir}/${process_pid}/vim"
+  local save_script=$(mktemp --tmpdir="${tmpDir}")
+  local load_script="${pane_saveDir}/${process_pid}/vim/load_script"
+  echo '' > "${load_script}"
+  saveVimSession
+  tmux send-keys -t "${pane_target}" "Escape" ":source ${save_script}" "Enter"
+  printf "tmux send-keys -t \"${pane_target}\" 'vim -S \"%q/%q/vim/load_script\"' \"Enter\"\n" "${pane_saveDir}" "${process_pid}" >> "${session_restoreFile}"
 }
 
 saveVimSession() {
-  local vimSessionFile=$(printf ':mksession! %q/%q.vimSession\n' "${pane_saveDir}" "${1}")
-  tmux send-keys -t "${pane_target}" "Escape" "${vimSessionFile}" "Enter"
-  printf "tmux send-keys -t \"${pane_target}\" 'vim -S \"%q/%q.vimSession\"' \"Enter\"\n" "${pane_saveDir}" "${1}" >> "${session_restoreFile}"
+  printf 'mksession! %q/%q/vim/session\n' "${pane_saveDir}" "${process_pid}" >> "${save_script}"
+  printf 'source "%q/%q/vim/session"\n' "${pane_saveDir}" "${process_pid}" >> "${load_script}"
 }
 
 getForegroundProcess() {
@@ -68,13 +79,15 @@ saveProcess() {
   local process_comm="$2"
   local process_pid="$1"
 
+  mkdir -p "${pane_saveDir}/${1}"
+
   if [[ "$process_comm" == "vim" ]]; then
     # vim plugin: save session
-    saveVimSession "$process_pid"
+    saveVim
   elif [[ "$process_comm" == "bash" ]]; then
     # bash plugin: save bash history
-    saveBashHistory "$process_pid"
-    saveHistoryBuffer "$process_pid"
+    saveBashHistory
+    saveHistoryBuffer
   else
     removeDir "$session_saveDir"
     echo "tmux sgc: process (pid: ${process_pid}) in pane not "\
@@ -91,7 +104,7 @@ saveProcess() {
 #globalEnvironment=$(tmux show-environment -g)
 
 # Paste Buffers
-pasteBuffersTmpDir="${tmpDir}/pasteBuffers"
+pasteBuffersTmpDir=$(mktemp -d --tmpdir="${tmpDir}")
 pasteBuffers=$(tmux list-buffers)
 
 mkdir "$pasteBuffersTmpDir"
@@ -119,6 +132,8 @@ fi
 server_sessionList=$(tmux list-sessions -F "#{session_name}"$'\036'"#{session_attached}")
 
 if [[ -n "$server_sessionList" ]]; then
+
+  # hook sessions
   while IFS=$'\n' read -r session; do
     IFS=$'\036' read session_name session_attached <<<"$session"
     #session_env=$(tmux show-environment -t "${session_name}")
@@ -143,6 +158,7 @@ if [[ -n "$server_sessionList" ]]; then
       fi
 EOL
 
+    # hook session
     while IFS=$'\n' read -r window; do
       IFS=$'\036' read window_name window_index window_layout window_active window_flags <<<"$window"
       window_target="${session_name}:${window_index}"
@@ -161,6 +177,7 @@ EOL
         echo "tmux set-option -w -t ${window_target} ${tmux_option}" >> "$window_tmuxConf"
       done < <(tmux show-options -w -t "${window_target}")
 
+      # hook window
       while IFS=$'\n' read -r pane; do
         IFS=$'\036' read pane_id pane_start_path pane_start_command pane_active pane_pid <<<"$pane"
         IFS=' ' read pane_comm pane_tpgid pane_tty < <(ps -o comm=,tpgid=,tty= --pid "$pane_pid")
