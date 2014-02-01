@@ -55,9 +55,24 @@ saveVim() {
   local load_script="${pane_saveDir}/${process_pid}/vim/load_script"
   echo '' > "${load_script}"
   saveVimSession
+  saveVimUndoHistory
   tmux send-keys -t "${pane_target}" "Escape" ":source ${save_script}" "Enter"
   printf "tmux send-keys -t \"${pane_target}\" 'vim -S \"%q/%q/vim/load_script\"' \"Enter\"\n" "${pane_saveDir}" "${process_pid}" >> "${session_restoreFile}"
 }
+
+saveVimUndoHistory() {
+  mkdir -p "${pane_saveDir}/${process_pid}/vim/undodir"
+  printf 'bufdo wundo! %q/%q/vim/undodir/bufnr("")\n' "${pane_saveDir}" "${process_pid}" >> "${save_script}"
+  printf 'bufdo rundo %q/%q/vim/undodir/bufnr("")\n' "${pane_saveDir}" "${process_pid}" >> "${load_script}"
+}
+
+#saveVimInfo() {
+#http://vimdoc.sourceforge.net/htmldoc/starting.html#:wv
+#}
+
+#saveVimSwap() {
+#http://vimdoc.sourceforge.net/htmldoc/recover.html#swap-file
+#}
 
 saveVimSession() {
   printf 'mksession! %q/%q/vim/session\n' "${pane_saveDir}" "${process_pid}" >> "${save_script}"
